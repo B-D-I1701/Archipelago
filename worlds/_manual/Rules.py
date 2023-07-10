@@ -2,6 +2,8 @@ from ..generic.Rules import set_rule
 from .Regions import regionMap
 from ..AutoWorld import World
 from BaseClasses import MultiWorld
+from .Items import item_name_to_id
+from .Locations import location_name_to_id
 import re
 
 
@@ -28,7 +30,7 @@ def infix_to_postfix(expr, location):
         while stack:
             postfix += stack.pop()
     except Exception:
-        raise KeyError("Invalid logic format for location/region {}.".format(location)) 
+        raise ValueError("Invalid logic format for location/region {}.".format(location)) 
     return postfix
 
 
@@ -52,21 +54,54 @@ def evaluate_postfix(expr, location):
                 op = stack.pop()
                 stack.append(not op)
     except Exception:
-        raise KeyError("Invalid logic format for location/region {}.".format(location)) 
+        raise ValueError("Invalid logic format for location/region {}.".format(location)) 
     
     if len(stack) != 1:
-        raise KeyError("Invalid logic format for location/region {}.".format(location))
+        raise ValueError("Invalid logic format for location/region {}.".format(location))
     return stack.pop()
+
+
+def checkAccess(state, item, player):
+    # split item into name and amount
+    item_parts = item.split(":")
+    item_name = item
+    item_count = 1
+    if len(item_parts) > 1:
+        item_name = item_parts[0]
+        item_count = int(item_parts[1])
+
+    # if requires item, check if player has the amount of the item
+    if item_name in item_name_to_id:
+        if state.has(item_name, player, item_count):
+            return True
+        else:
+            return False
+    # if requires location check if player can access that location
+    elif item_name in location_name_to_id:
+        if state.can_reach(item_name, "Location", player):
+            return True
+        else:
+            return False
+    # with data validation this should never run
+    else:
+        raise ValueError("{} is not a valid item or location".format(item_name))
 
 
 def set_rules(base: World, world: MultiWorld, player: int):
     # this is only called when the area (think, location or region) has a "requires" field that is a string
     def checkRequireStringForArea(state, area):
         # parse user written statement into list of each item
-        reqires_raw = re.split('(\AND|\)|\(|OR|\|)', area["requires"])
-        remove_spaces = [x.strip() for x in reqires_raw]
-        remove_empty = [x for x in remove_spaces if x != '']
-        requires_list = [x for x in remove_empty if x != '|']
+        requires_raw = re.split(r'(\|.*?\|)', area["requires"])
+
+        requires_split = []
+        for i in requires_raw:
+            if i and i[0] == '|':
+                requires_split.append(i[1:-1])
+            else:
+                requires_split.extend(re.split('(\AND|\)|\(|OR)', i))
+
+        remove_spaces = [x.strip() for x in requires_split]
+        requires_list = [x for x in remove_spaces if x != '']
 
         for i, item in enumerate(requires_list):
             if item.lower() == "or":
@@ -76,15 +111,7 @@ def set_rules(base: World, world: MultiWorld, player: int):
             elif item == ")" or item == "(":
                 continue
             else:
-                item_parts = item.split(":")
-                item_name = item
-                item_count = 1
-
-                if len(item_parts) > 1:
-                    item_name = item_parts[0]
-                    item_count = int(item_parts[1])
-
-                if state.has(item_name, player, item_count):
+                if checkAccess(state, item, player):
                     requires_list[i] = "1"
                 else:
                     requires_list[i] = "0"
@@ -106,30 +133,14 @@ def set_rules(base: World, world: MultiWorld, player: int):
                     or_items = item["or"]
 
                 for or_item in or_items:
-                    or_item_parts = or_item.split(":")
-                    or_item_name = or_item
-                    or_item_count = 1
-
-                    if len(or_item_parts) > 1:
-                        or_item_name = or_item_parts[0]
-                        or_item_count = int(or_item_parts[1])
-
-                    if not state.has(or_item_name, player, or_item_count):
+                    if not checkAccess(state, or_item, player):
                         canAccessOr = False
 
                 if canAccessOr:
                     canAccess = True
                     break
             else:
-                item_parts = item.split(":")
-                item_name = item
-                item_count = 1
-
-                if len(item_parts) > 1:
-                    item_name = item_parts[0]
-                    item_count = int(item_parts[1])
-
-                if not state.has(item_name, player, item_count):
+                if not checkAccess(state, item, player):
                     canAccess = False
 
         return canAccess
